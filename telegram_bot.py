@@ -68,7 +68,11 @@ def handle_message(update, context):
 
 # --- CONFIGURAZIONE DELL'APPLICATION (Sostituisce Dispatcher) ---
 # Inizializzazione dell'Application che gestisce il bot
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+application = Application.builder() \
+    .token(TELEGRAM_BOT_TOKEN) \
+    .http_version('1.1') \
+    .get_updates_http_version('1.1') \
+    .build()
 
 # Aggiunta degli Handler 
 application.add_handler(CommandHandler("start", start))
@@ -86,14 +90,30 @@ def index():
 def webhook():
     """Endpoint che riceve gli aggiornamenti da Telegram."""
     if request.method == "POST":
-        # 1. Crea l'oggetto Update dall'input JSON
-        # L'oggetto bot è accessibile tramite application.bot
-        update = Update.de_json(request.get_json(force=True), application.bot)
+        # 1. Ottieni i dati JSON
+        json_data = request.get_json(force=True)
         
-        # 2. Invia l'aggiornamento alla coda di Application
-        application.update_queue.put(update)
-        
-        return "ok", 200 # Risposta attesa da Telegram
+        # 2. Utilizza il metodo application.process_update che gestisce l'asincronicità
+        #    in modo non bloccante nel contesto sincrono di Flask.
+        try:
+            # Crea l'oggetto Update dall'input JSON
+            update = Update.de_json(json_data, application.bot)
+            
+            # Processa l'update. Questo deve essere eseguito su un thread separato
+            # o su un loop event-driven. In un contesto serverless/webhook semplice
+            # come questo, usiamo un metodo non bloccante per avviare il processo.
+            application.process_update(update) 
+            
+            # Se la riga sopra non funziona direttamente su Render, puoi provare:
+            # application.create_task(application.process_update(update))
+
+        except Exception as e:
+            print(f"Errore durante l'elaborazione dell'update: {e}")
+            # Rispondi comunque 200 a Telegram per evitare reinvii continui
+            return "Errore interno", 200
+
+        # Risposta attesa da Telegram per indicare che il messaggio è stato ricevuto
+        return "ok", 200
     return "Method Not Allowed", 405
     
 # --- FUNZIONE PRINCIPALE PER L'AVVIO ---
