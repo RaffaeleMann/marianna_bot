@@ -1,5 +1,7 @@
 import os
 import requests
+import threading
+import time
 from flask import Flask, request
 
 # --- CONFIGURAZIONE ---
@@ -12,6 +14,49 @@ API_AUTH_USER = os.environ.get("API_AUTH_USER")
 API_AUTH_PASS = os.environ.get("API_AUTH_PASS")
 
 app = Flask(__name__)
+
+
+# --- CLASSE PER TYPING CONTINUO ---
+
+class TypingIndicator:
+    """Mantiene l'indicatore 'sta scrivendo...' attivo continuamente"""
+    
+    def __init__(self, chat_id):
+        self.chat_id = chat_id
+        self.running = False
+        self.thread = None
+    
+    def _send_typing(self):
+        """Invia l'azione typing"""
+        url = f"{TELEGRAM_API}/sendChatAction"
+        try:
+            requests.post(url, json={"chat_id": self.chat_id, "action": "typing"}, timeout=5)
+        except:
+            pass
+    
+    def _keep_typing(self):
+        """Loop che invia typing ogni 4 secondi"""
+        while self.running:
+            self._send_typing()
+            # Telegram typing dura ~5 sec, reinviamo ogni 4
+            for _ in range(8):  # 8 x 0.5 = 4 secondi (per stop più reattivo)
+                if not self.running:
+                    break
+                time.sleep(0.5)
+    
+    def start(self):
+        """Avvia l'indicatore"""
+        self.running = True
+        self._send_typing()  # Invia subito
+        self.thread = threading.Thread(target=self._keep_typing, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        """Ferma l'indicatore"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1)
+
 
 # --- FUNZIONI TELEGRAM ---
 
@@ -28,15 +73,6 @@ def send_message(chat_id, text, parse_mode="Markdown"):
         print(f"Telegram response: {response.status_code}")
     except Exception as e:
         print(f"Errore invio messaggio: {e}")
-
-
-def send_typing_action(chat_id):
-    """Mostra 'sta scrivendo...'"""
-    url = f"{TELEGRAM_API}/sendChatAction"
-    try:
-        requests.post(url, json={"chat_id": chat_id, "action": "typing"}, timeout=5)
-    except:
-        pass
 
 
 # --- FUNZIONI API MARIANNA ---
@@ -85,7 +121,7 @@ def get_chat_response(message, context):
             auth=(API_AUTH_USER, API_AUTH_PASS),
             json=payload,
             headers={'Content-Type': 'application/json'},
-            timeout=60  # Timeout più lungo per generazione LLM
+            timeout=120  # Timeout lungo per LLM
         )
         
         response.raise_for_status()
@@ -103,33 +139,42 @@ def get_chat_response(message, context):
 def process_user_message(chat_id, user_text):
     """Processa il messaggio: context → chat → risposta"""
     
-    # 1️⃣ Mostra "sta scrivendo..."
-    send_typing_action(chat_id)
+    # 🔄 Avvia indicatore "sta scrivendo..." continuo
+    typing = TypingIndicator(chat_id)
+    typing.start()
     
-    # 2️⃣ Ottieni contesto
-    context = get_context_from_api(user_text)
-    
-    if context is None:
-        send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
-        return
-    
-    if not context:
-        send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
-        return
-    
-    # 3️⃣ Mostra ancora "sta scrivendo..." (per la generazione)
-    send_typing_action(chat_id)
-    
-    # 4️⃣ Genera risposta con /chat
-    response = get_chat_response(user_text, context)
-    
-    if not response:
-        # Fallback: mostra almeno il contesto
-        send_message(chat_id, f"📚 *Contesto trovato:*\n\n{context[:3000]}")
-        return
-    
-    # 5️⃣ Invia risposta finale
-    send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
+    try:
+        # 1️⃣ Ottieni contesto
+        context = get_context_from_api(user_text)
+        
+        if context is None:
+            typing.stop()
+            send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
+            return
+        
+        if not context:
+            typing.stop()
+            send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
+            return
+        
+        # 2️⃣ Genera risposta con /chat (typing continua automaticamente)
+        response = get_chat_response(user_text, context)
+        
+        # 🛑 Ferma typing prima di inviare la risposta
+        typing.stop()
+        
+        if not response:
+            # Fallback: mostra almeno il contesto
+            send_message(chat_id, f"📚 *Contesto trovato:*\n\n{context[:3000]}")
+            return
+        
+        # 3️⃣ Invia risposta finale
+        send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
+        
+    except Exception as e:
+        typing.stop()
+        print(f"Errore process_user_message: {e}")
+        send_message(chat_id, "❌ Si è verificato un errore. Riprova più tardi.")
 
 
 # --- ENDPOINTS ---
@@ -164,7 +209,7 @@ def webhook():
             if text.startswith("/start"):
                 reply = (
                     f"👋 Ciao {user_name}!\n\n"
-                    "Sono *Marianna*, il tuo assistente virtuale.\n"
+                    "Sono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\n"
                     "Inviami una domanda e cercherò di risponderti!\n\n"
                     "📝 _Esempio: Parlami di Pulcinella_"
                 )
@@ -188,7 +233,7 @@ def webhook():
                 reply = (
                     "🤖 *Bot Marianna*\n\n"
                     "Versione: 2.0\n"
-                    "Sviluppato per UniOr NLP Group\n\n"
+                    "Sviluppato per UniOr NLP Group da Dahlia.\n\n"
                     f"API: `{API_BASE_URL}`"
                 )
                 send_message(chat_id, reply)
