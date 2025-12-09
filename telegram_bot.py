@@ -3,7 +3,7 @@ import requests
 import json
 from flask import Flask, request, jsonify
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
+from telegram.ext import Application, CommandHandler, MessageHandler, Filters
 
 # --- CONFIGURAZIONE ---
 # variabile d'ambiente
