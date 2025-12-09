@@ -83,7 +83,7 @@ def get_context_from_api(text):
         url = f"{API_BASE_URL}/get_marianna_context"
         payload = {
             "text": text,
-            "top_k": 3,
+            "top_k": 2,
             "use_stopwords": True
         }
         
