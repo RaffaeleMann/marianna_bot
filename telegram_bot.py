@@ -63,8 +63,10 @@ def handle_message(update, context):
     update.message.reply_markdown(reply_text)
 
 # --- CONFIGURAZIONE DEL DISPATCHER ---
-dispatcher.add_handler(CommandHandler("start", start))
-dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
 
 # --- ENDPOINT DEL WEBHOOK (Funzione chiave per Render) ---
@@ -76,16 +78,15 @@ def index():
 
 @app.route("/" + TELEGRAM_BOT_TOKEN, methods=["POST"])
 def webhook():
-    # Telegram invia gli aggiornamenti qui.
     if request.method == "POST":
-        # Ottieni i dati JSON inviati da Telegram
-        update = Update.de_json(request.get_json(force=True), bot)
+        # Crea l'oggetto Update
+        update = Update.de_json(request.get_json(force=True), application.bot)
         
-        # Passa l'aggiornamento al dispatcher per l'elaborazione
-        dispatcher.process_update(update)
+        # Metti l'aggiornamento nella coda dell'application
+        application.update_queue.put(update)
         
-        return "ok", 200 # Risposta necessaria per Telegram
-
+        return "ok", 200
+        
 # --- FUNZIONE PRINCIPALE PER L'AVVIO ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
