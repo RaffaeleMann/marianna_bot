@@ -86,7 +86,7 @@ def get_context_from_api(text):
             "top_k": 2,
             "use_stopwords": True
         }
-        
+
         response = requests.post(
             url,
             auth=(API_AUTH_USER, API_AUTH_PASS),
@@ -100,11 +100,24 @@ def get_context_from_api(text):
         
         print(f"Context API Response: {data}")
         
-        return data.get('context', '')
+        context = data.get('context', '')
+
+        # --- LIMITE DI SICUREZZA: MAX 5000 TOKEN ---
+        def truncate_tokens(txt, max_tokens=5000):
+            tokens = txt.split()
+            if len(tokens) > max_tokens:
+                print(f"⚠️ Contesto troppo lungo ({len(tokens)} token). Taglio a {max_tokens}.")
+                return " ".join(tokens[:max_tokens])
+            return txt
+
+        context = truncate_tokens(context)
+
+        return context
             
     except Exception as e:
         print(f"Errore get_context: {e}")
         return None
+
 
 
 def get_chat_response(message, context):
