@@ -247,39 +247,34 @@ def health():
     }, 200
 
 
-@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+@app.route("/" + str(TELEGRAM_BOT_TOKEN), methods=["POST"])
 def webhook():
-    """Riceve gli update da Telegram e gestisce messaggi e comandi."""
+    """Riceve gli update da Telegram e processa il messaggio utente in modo sincrono"""
     try:
         data = request.get_json(force=True)
-        print(f"[WEBHOOK] Update ricevuto: {data}")
+        print(f"Update ricevuto: {data}")
 
-        message = data.get("message")
-        if not message:
-            return "no message", 200
+        # Verifica che ci sia un messaggio testuale
+        message_data = data.get("message")
+        if not message_data or "text" not in message_data:
+            return "ok", 200
 
-        chat_id = message["chat"]["id"]
-        text = message.get("text", "")
-        user_name = message.get("from", {}).get("first_name", "Utente")
+        chat_id = message_data["chat"]["id"]
+        text = message_data["text"]
+        user_name = message_data["from"].get("first_name", "Utente")
 
-        # ---------------------- #
-        #      COMANDI /        #
-        # ---------------------- #
-
+        # Gestione comandi base
         if text.startswith("/start"):
             reply = (
                 f"👋 Ciao {user_name}!\n\n"
-                "Sono *Marianna*, un'assistente virtuale esperta "
-                "del patrimonio culturale di Napoli.\n"
-                "Inviami una domanda e ti risponderò con piacere!\n\n"
+                "Sono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\n"
+                "Inviami una domanda e cercherò di risponderti!\n\n"
                 "📝 _Esempio: Parlami di Pulcinella_"
             )
             send_message(chat_id, reply)
-            return "ok", 200
-
-        if text.startswith("/help"):
+        elif text.startswith("/help"):
             reply = (
-                "ℹ️ *Come usare Marianna*\n\n"
+                "ℹ️ *Come usare Marianna:*\n\n"
                 "Scrivi semplicemente una domanda.\n"
                 "Marianna cercherà informazioni e ti risponderà.\n\n"
                 "*Esempi:*\n"
@@ -288,9 +283,7 @@ def webhook():
                 "• Storia di Napoli"
             )
             send_message(chat_id, reply)
-            return "ok", 200
-
-        if text.startswith("/info"):
+        elif text.startswith("/info"):
             reply = (
                 "🤖 *Bot Marianna*\n\n"
                 "Versione: 2.0\n"
@@ -298,21 +291,17 @@ def webhook():
                 f"API: `{API_BASE_URL}`"
             )
             send_message(chat_id, reply)
-            return "ok", 200
-
-        if text.startswith("/"):
+        elif text.startswith("/"):
             send_message(chat_id, "⚠️ Comando non riconosciuto. Usa /help")
-            return "ok", 200
-
-        # ---------------------- #
-        #   MESSAGGI NORMALI     #
-        # ---------------------- #
-        process_user_message(chat_id, text)
+        else:
+            # Messaggio normale → processa in modo sincrono
+            process_user_message(chat_id, text)
 
     except Exception as e:
-        print(f"[WEBHOOK] Errore: {e}")
+        print(f"Errore webhook: {e}")
 
     return "ok", 200
+
 
 
 # --- AVVIO LOCALE ---
