@@ -149,45 +149,86 @@ def get_chat_response(message, context):
         return None
 
 
-def process_user_message(chat_id, user_text):
-    """Processa il messaggio: context → chat → risposta"""
+def trim_context(context, max_tokens=5000):
+    """Taglia il contesto se supera max_tokens token (approssimati)."""
+    if not context:
+        return context
     
-    # 🔄 Avvia indicatore "sta scrivendo..." continuo
+    tokens = context.split()
+    if len(tokens) <= max_tokens:
+        return context
+    
+    trimmed = " ".join(tokens[:max_tokens])
+    print(f"[Context trimmed] {len(tokens)} → {max_tokens} tokens")
+    return trimmed
+
+def fit_context_for_model(message, context, max_tokens=5800):
+    """
+    Taglia il context in modo che message + context non superino max_tokens.
+    Tokenizzazione approssimata via split(), sufficiente per LLAMA/gguf.
+    """
+    msg_tokens = len(message.split())
+    ctx_tokens = len(context.split())
+
+    if msg_tokens + ctx_tokens <= max_tokens:
+        return context  # tutto ok
+
+    # quanto spazio rimane per il context?
+    allowed_ctx = max_tokens - msg_tokens
+
+    if allowed_ctx < 0:
+        allowed_ctx = 0
+
+    print(f"[Context fitting] msg={msg_tokens}, ctx={ctx_tokens}, allowed_ctx={allowed_ctx}")
+
+    trimmed_ctx = " ".join(context.split()[:allowed_ctx])
+
+    print(f"[Context trimmed for model] {ctx_tokens} → {allowed_ctx} tokens")
+
+    return trimmed_ctx
+
+
+def process_user_message(chat_id, user_text):
     typing = TypingIndicator(chat_id)
     typing.start()
-    
+
     try:
         # 1️⃣ Ottieni contesto
         context = get_context_from_api(user_text)
-        
+
         if context is None:
             typing.stop()
             send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
             return
-        
+
         if not context:
             typing.stop()
             send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
             return
+
+        # 🔥 2️⃣ TAGLIO CONTEX PREVENTIVO (max 5000 tokens)
+        print(f"[Context original token count] {len(context.split())}")
+        context = trim_context(context, max_tokens=5000)
+        print(f"[Context used token count] {len(context.split())}")
+
+        context = fit_context_for_model(user_text, context, max_tokens=5800)
         
-        # 2️⃣ Genera risposta con /chat (typing continua automaticamente)
+        # 3️⃣ Richiesta alla /chat
         response = get_chat_response(user_text, context)
-        
-        # 🛑 Ferma typing prima di inviare la risposta
+
         typing.stop()
-        
+
         if not response:
-            # Fallback: mostra almeno il contesto
-            send_message(chat_id, f"📚 *Contesto trovato:*\n\n{context[:3000]}")
+            send_message(chat_id, f"📚 *Contesto trovato (parziale):*\n\n{context[:3000]}")
             return
-        
-        # 3️⃣ Invia risposta finale
+
         send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
-        
+
     except Exception as e:
         typing.stop()
         print(f"Errore process_user_message: {e}")
         send_message(chat_id, "❌ Si è verificato un errore. Riprova più tardi.")
+
 
 
 # --- ENDPOINTS ---
