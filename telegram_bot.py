@@ -15,6 +15,10 @@ API_AUTH_PASS = os.environ.get("API_AUTH_PASS")
 
 app = Flask(__name__)
 
+#  Set per tracciare messaggi in elaborazione (evita duplicati)
+processing_messages = set()
+processing_lock = threading.Lock()
+
 
 # --- CLASSE PER TYPING CONTINUO ---
 
@@ -38,8 +42,7 @@ class TypingIndicator:
         """Loop che invia typing ogni 4 secondi"""
         while self.running:
             self._send_typing()
-            # Telegram typing dura ~5 sec, reinviamo ogni 4
-            for _ in range(8):  # 8 x 0.5 = 4 secondi (per stop più reattivo)
+            for _ in range(8):  # 8 x 0.5 = 4 secondi
                 if not self.running:
                     break
                 time.sleep(0.5)
@@ -47,7 +50,7 @@ class TypingIndicator:
     def start(self):
         """Avvia l'indicatore"""
         self.running = True
-        self._send_typing()  # Invia subito
+        self._send_typing()
         self.thread = threading.Thread(target=self._keep_typing, daemon=True)
         self.thread.start()
     
@@ -86,7 +89,7 @@ def get_context_from_api(text):
             "top_k": 2,
             "use_stopwords": True
         }
-
+        
         response = requests.post(
             url,
             auth=(API_AUTH_USER, API_AUTH_PASS),
@@ -100,24 +103,11 @@ def get_context_from_api(text):
         
         print(f"Context API Response: {data}")
         
-        context = data.get('context', '')
-
-        # --- LIMITE DI SICUREZZA: MAX 5000 TOKEN ---
-        def truncate_tokens(txt, max_tokens=5000):
-            tokens = txt.split()
-            if len(tokens) > max_tokens:
-                print(f"⚠️ Contesto troppo lungo ({len(tokens)} token). Taglio a {max_tokens}.")
-                return " ".join(tokens[:max_tokens])
-            return txt
-
-        context = truncate_tokens(context)
-
-        return context
+        return data.get('context', '')
             
     except Exception as e:
         print(f"Errore get_context: {e}")
         return None
-
 
 
 def get_chat_response(message, context):
@@ -134,7 +124,7 @@ def get_chat_response(message, context):
             auth=(API_AUTH_USER, API_AUTH_PASS),
             json=payload,
             headers={'Content-Type': 'application/json'},
-            timeout=120  # Timeout lungo per LLM
+            timeout=120
         )
         
         response.raise_for_status()
@@ -150,7 +140,7 @@ def get_chat_response(message, context):
 
 
 def trim_context(context, max_tokens=5000):
-    """Taglia il contesto se supera max_tokens token (approssimati)."""
+    """Taglia il contesto se supera max_tokens"""
     if not context:
         return context
     
@@ -159,76 +149,79 @@ def trim_context(context, max_tokens=5000):
         return context
     
     trimmed = " ".join(tokens[:max_tokens])
-    print(f"[Context trimmed] {len(tokens)} → {max_tokens} tokens")
+    print(f" Context trimmed: {len(tokens)} → {max_tokens} tokens")
     return trimmed
 
+
 def fit_context_for_model(message, context, max_tokens=5800):
-    """
-    Taglia il context in modo che message + context non superino max_tokens.
-    Tokenizzazione approssimata via split(), sufficiente per LLAMA/gguf.
-    """
+    """Taglia context in base a messaggio + contesto totale"""
     msg_tokens = len(message.split())
     ctx_tokens = len(context.split())
-
+    
     if msg_tokens + ctx_tokens <= max_tokens:
-        return context  # tutto ok
-
-    # quanto spazio rimane per il context?
-    allowed_ctx = max_tokens - msg_tokens
-
-    if allowed_ctx < 0:
-        allowed_ctx = 0
-
-    print(f"[Context fitting] msg={msg_tokens}, ctx={ctx_tokens}, allowed_ctx={allowed_ctx}")
-
-    trimmed_ctx = " ".join(context.split()[:allowed_ctx])
-
-    print(f"[Context trimmed for model] {ctx_tokens} → {allowed_ctx} tokens")
-
-    return trimmed_ctx
+        return context
+    
+    allowed_ctx = max(0, max_tokens - msg_tokens)
+    
+    print(f" Context fitting: msg={msg_tokens}, ctx={ctx_tokens}, allowed={allowed_ctx}")
+    
+    return " ".join(context.split()[:allowed_ctx])
 
 
-def process_user_message(chat_id, user_text):
+def process_user_message_background(message_id, chat_id, user_text):
+    """
+    Processa il messaggio in background.
+    Rimuove il message_id dal set quando finisce.
+    """
     typing = TypingIndicator(chat_id)
     typing.start()
-
+    
     try:
-        # 1️⃣ Ottieni contesto
+        print(f" Processing message_id={message_id}")
+        
+        #  Ottieni contesto
         context = get_context_from_api(user_text)
-
+        
         if context is None:
             typing.stop()
             send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
             return
-
+        
         if not context:
             typing.stop()
             send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
             return
-
-        # 🔥 2️⃣ TAGLIO CONTEX PREVENTIVO (max 5000 tokens)
-        print(f"[Context original token count] {len(context.split())}")
-        context = trim_context(context, max_tokens=5800)
-        print(f"[Context used token count] {len(context.split())}")
-
-        context = fit_context_for_model(user_text, context, max_tokens=5800)
         
-        # 3️⃣ Richiesta alla /chat
+        #  Taglio contesto
+        print(f" Context original: {len(context.split())} tokens")
+        context = trim_context(context, max_tokens=5000)
+        context = fit_context_for_model(user_text, context, max_tokens=5800)
+        print(f" Context trimmed: {len(context.split())} tokens")
+        
+        #  Genera risposta
         response = get_chat_response(user_text, context)
-
+        
         typing.stop()
-
+        
         if not response:
-            send_message(chat_id, f"📚 *Contesto trovato (parziale):*\n\n{context[:3000]}")
+            send_message(chat_id, f"📚 *Contesto trovato:*\n\n{context[:3000]}")
             return
-
+        
+        #  Invia risposta
         send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
-
+        
+        print(f" Completed message_id={message_id}")
+        
     except Exception as e:
         typing.stop()
-        print(f"Errore process_user_message: {e}")
-        send_message(chat_id, "❌ Si è verificato un errore. Riprova più tardi.")
-
+        print(f" Errore process_user_message: {e}")
+        send_message(chat_id, "  Si è verificato un errore. Riprova più tardi.")
+    
+    finally:
+        #  Rimuovi dal set di elaborazione
+        with processing_lock:
+            processing_messages.discard(message_id)
+            print(f" Released message_id={message_id}. Processing queue: {len(processing_messages)}")
 
 
 # --- ENDPOINTS ---
@@ -241,77 +234,104 @@ def index():
 @app.route("/health", methods=["GET"])
 def health():
     return {
-        "status": "healthy", 
+        "status": "healthy",
         "bot": "marianna",
-        "api_configured": bool(API_AUTH_USER and API_AUTH_PASS)
+        "api_configured": bool(API_AUTH_USER and API_AUTH_PASS),
+        "processing_queue": len(processing_messages)
     }, 200
 
 
 @app.route("/" + str(TELEGRAM_BOT_TOKEN), methods=["POST"])
 def webhook():
-    """Riceve gli update da Telegram e processa il messaggio utente in modo sincrono"""
+    """
+    Riceve gli update da Telegram.
+    Risponde immediatamente 200 OK e processa in background.
+    """
     try:
         data = request.get_json(force=True)
-        print(f"Update ricevuto: {data}")
-
+        print(f"  Update ricevuto: {data}")
+        
         message_data = data.get("message")
         if not message_data or "text" not in message_data:
             return "ok", 200
-
+        
+        message_id = message_data["message_id"]
         chat_id = message_data["chat"]["id"]
         text = message_data["text"]
         user_name = message_data["from"].get("first_name", "Utente")
-
-        # Comandi
+        
+        #  Controlla se già in elaborazione
+        with processing_lock:
+            if message_id in processing_messages:
+                print(f" Message {message_id} già in elaborazione. Ignoro duplicato.")
+                return "ok", 200
+            
+            # Aggiungi al set
+            processing_messages.add(message_id)
+            print(f" Acquired message_id={message_id}. Queue size: {len(processing_messages)}")
+        
+        # Comandi (risposte immediate)
         if text.startswith("/start"):
-            send_message(chat_id, f"👋 Ciao {user_name}!\nSono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\nInvia una domanda e ti risponderò!")
+            send_message(
+                chat_id,
+                f"👋 Ciao {user_name}!\n\n"
+                "Sono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\n"
+                "Inviami una domanda e cercherò di risponderti!\n\n"
+                "📝 _Esempio: Parlami di Pulcinella_"
+            )
+            with processing_lock:
+                processing_messages.discard(message_id)
+        
         elif text.startswith("/help"):
-            send_message(chat_id, "ℹ️ Scrivi semplicemente una domanda. Marianna cercherà informazioni e ti risponderà.")
+            send_message(
+                chat_id,
+                "ℹ️ *Come usare Marianna:*\n\n"
+                "Scrivi semplicemente una domanda.\n"
+                "Marianna cercherà informazioni e ti risponderà.\n\n"
+                "*Esempi:*\n"
+                "• Parlami di Pulcinella\n"
+                "• Chi era Totò?\n"
+                "• Storia di Napoli"
+            )
+            with processing_lock:
+                processing_messages.discard(message_id)
+        
         elif text.startswith("/info"):
-            send_message(chat_id, f"🤖 Bot Marianna v2.0\nAPI: `{API_BASE_URL}`")
+            send_message(
+                chat_id,
+                f"🤖 *Bot Marianna*\n\n"
+                f"Versione: 2.0\n"
+                f"Sviluppato per UniOr NLP Group da Dahlia.\n\n"
+                f"API: `{API_BASE_URL}`\n"
+                f"In coda: {len(processing_messages)} messaggi"
+            )
+            with processing_lock:
+                processing_messages.discard(message_id)
+        
         elif text.startswith("/"):
-            send_message(chat_id, "⚠️ Comando non riconosciuto. Usa /help")
+            send_message(chat_id, " Comando non riconosciuto. Usa /help")
+            with processing_lock:
+                processing_messages.discard(message_id)
+        
         else:
-            # Messaggio normale → invia subito typing e processa tutto sincrono
-            typing = TypingIndicator(chat_id)
-            typing.start()
-            try:
-                # 1️⃣ Ottieni contesto (solo una volta!)
-                context = get_context_from_api(text)
-                if context is None:
-                    send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
-                    return "ok", 200
-                if not context:
-                    send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
-                    return "ok", 200
-
-                # 2️⃣ Taglio contesto
-                context = trim_context(context, max_tokens=5800)
-                context = fit_context_for_model(text, context, max_tokens=5800)
-
-                # 3️⃣ Richiesta alla /chat
-                response = get_chat_response(text, context)
-                if not response:
-                    send_message(chat_id, f"📚 *Contesto trovato (parziale):*\n\n{context[:3000]}")
-                else:
-                    send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
-
-            except Exception as e:
-                print(f"Errore process_user_message: {e}")
-                send_message(chat_id, "❌ Si è verificato un errore. Riprova più tardi.")
-            finally:
-                typing.stop()
-
+            # 🚀 Messaggi normali → processa in background thread
+            thread = threading.Thread(
+                target=process_user_message_background,
+                args=(message_id, chat_id, text),
+                daemon=True
+            )
+            thread.start()
+        
     except Exception as e:
-        print(f"Errore webhook: {e}")
-
+        print(f"❌ Errore webhook: {e}")
+    
+    #  RISPOSTA IMMEDIATA A TELEGRAM (entro 1-2 secondi)
     return "ok", 200
-
 
 
 # --- AVVIO LOCALE ---
 if __name__ == "__main__":
-    print(f"🚀 Bot avviato!")
-    print(f"📡 API URL: {API_BASE_URL}")
-    print(f"🔐 Auth configurata: {bool(API_AUTH_USER and API_AUTH_PASS)}")
+    print(f"Bot avviato!")
+    print(f"API URL: {API_BASE_URL}")
+    print(f"Auth configurata: {bool(API_AUTH_USER and API_AUTH_PASS)}")
     app.run(host="0.0.0.0", port=PORT, debug=True)
