@@ -208,10 +208,10 @@ def process_user_message(chat_id, user_text):
 
         # 🔥 2️⃣ TAGLIO CONTEX PREVENTIVO (max 5000 tokens)
         print(f"[Context original token count] {len(context.split())}")
-        context = trim_context(context, max_tokens=5000)
+        context = trim_context(context, max_tokens=300)
         print(f"[Context used token count] {len(context.split())}")
 
-        context = fit_context_for_model(user_text, context, max_tokens=5800)
+        context = fit_context_for_model(user_text, context, max_tokens=300)
         
         # 3️⃣ Richiesta alla /chat
         response = get_chat_response(user_text, context)
