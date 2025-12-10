@@ -208,10 +208,10 @@ def process_user_message(chat_id, user_text):
 
         # 🔥 2️⃣ TAGLIO CONTEX PREVENTIVO (max 5000 tokens)
         print(f"[Context original token count] {len(context.split())}")
-        context = trim_context(context, max_tokens=300)
+        context = trim_context(context, max_tokens=5800)
         print(f"[Context used token count] {len(context.split())}")
 
-        context = fit_context_for_model(user_text, context, max_tokens=300)
+        context = fit_context_for_model(user_text, context, max_tokens=5800)
         
         # 3️⃣ Richiesta alla /chat
         response = get_chat_response(user_text, context)
@@ -247,62 +247,71 @@ def health():
     }, 200
 
 
-@app.route("/" + str(TELEGRAM_BOT_TOKEN), methods=["POST"])
+@app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def webhook():
-    """Riceve gli update da Telegram"""
+    """Riceve gli update da Telegram e gestisce messaggi e comandi."""
     try:
         data = request.get_json(force=True)
-        print(f"Update ricevuto: {data}")
-        
-        if "message" in data and "text" in data["message"]:
-            chat_id = data["message"]["chat"]["id"]
-            text = data["message"]["text"]
-            user_name = data["message"]["from"].get("first_name", "Utente")
-            
-            # Comando /start
-            if text.startswith("/start"):
-                reply = (
-                    f"👋 Ciao {user_name}!\n\n"
-                    "Sono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\n"
-                    "Inviami una domanda e cercherò di risponderti!\n\n"
-                    "📝 _Esempio: Parlami di Pulcinella_"
-                )
-                send_message(chat_id, reply)
-            
-            # Comando /help
-            elif text.startswith("/help"):
-                reply = (
-                    "ℹ️ *Come usare Marianna:*\n\n"
-                    "Scrivi semplicemente una domanda.\n"
-                    "Marianna cercherà informazioni e ti risponderà.\n\n"
-                    "*Esempi:*\n"
-                    "• Parlami di Pulcinella\n"
-                    "• Chi era Totò?\n"
-                    "• Storia di Napoli"
-                )
-                send_message(chat_id, reply)
-            
-            # Comando /info
-            elif text.startswith("/info"):
-                reply = (
-                    "🤖 *Bot Marianna*\n\n"
-                    "Versione: 2.0\n"
-                    "Sviluppato per UniOr NLP Group da Dahlia.\n\n"
-                    f"API: `{API_BASE_URL}`"
-                )
-                send_message(chat_id, reply)
-            
-            # Ignora altri comandi
-            elif text.startswith("/"):
-                send_message(chat_id, "⚠️ Comando non riconosciuto. Usa /help")
-            
-            # Messaggi normali → processo completo
-            else:
-                process_user_message(chat_id, text)
-        
+        print(f"[WEBHOOK] Update ricevuto: {data}")
+
+        message = data.get("message")
+        if not message:
+            return "no message", 200
+
+        chat_id = message["chat"]["id"]
+        text = message.get("text", "")
+        user_name = message.get("from", {}).get("first_name", "Utente")
+
+        # ---------------------- #
+        #      COMANDI /        #
+        # ---------------------- #
+
+        if text.startswith("/start"):
+            reply = (
+                f"👋 Ciao {user_name}!\n\n"
+                "Sono *Marianna*, un'assistente virtuale esperta "
+                "del patrimonio culturale di Napoli.\n"
+                "Inviami una domanda e ti risponderò con piacere!\n\n"
+                "📝 _Esempio: Parlami di Pulcinella_"
+            )
+            send_message(chat_id, reply)
+            return "ok", 200
+
+        if text.startswith("/help"):
+            reply = (
+                "ℹ️ *Come usare Marianna*\n\n"
+                "Scrivi semplicemente una domanda.\n"
+                "Marianna cercherà informazioni e ti risponderà.\n\n"
+                "*Esempi:*\n"
+                "• Parlami di Pulcinella\n"
+                "• Chi era Totò?\n"
+                "• Storia di Napoli"
+            )
+            send_message(chat_id, reply)
+            return "ok", 200
+
+        if text.startswith("/info"):
+            reply = (
+                "🤖 *Bot Marianna*\n\n"
+                "Versione: 2.0\n"
+                "Sviluppato per UniOr NLP Group da Dahlia.\n\n"
+                f"API: `{API_BASE_URL}`"
+            )
+            send_message(chat_id, reply)
+            return "ok", 200
+
+        if text.startswith("/"):
+            send_message(chat_id, "⚠️ Comando non riconosciuto. Usa /help")
+            return "ok", 200
+
+        # ---------------------- #
+        #   MESSAGGI NORMALI     #
+        # ---------------------- #
+        process_user_message(chat_id, text)
+
     except Exception as e:
-        print(f"Errore webhook: {e}")
-    
+        print(f"[WEBHOOK] Errore: {e}")
+
     return "ok", 200
 
 
