@@ -254,7 +254,6 @@ def webhook():
         data = request.get_json(force=True)
         print(f"Update ricevuto: {data}")
 
-        # Verifica che ci sia un messaggio testuale
         message_data = data.get("message")
         if not message_data or "text" not in message_data:
             return "ok", 200
@@ -263,39 +262,45 @@ def webhook():
         text = message_data["text"]
         user_name = message_data["from"].get("first_name", "Utente")
 
-        # Gestione comandi base
+        # Comandi
         if text.startswith("/start"):
-            reply = (
-                f"👋 Ciao {user_name}!\n\n"
-                "Sono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\n"
-                "Inviami una domanda e cercherò di risponderti!\n\n"
-                "📝 _Esempio: Parlami di Pulcinella_"
-            )
-            send_message(chat_id, reply)
+            send_message(chat_id, f"👋 Ciao {user_name}!\nSono *Marianna*, un'assistente virtuale esperta del patrimonio culturale di Napoli.\nInvia una domanda e ti risponderò!")
         elif text.startswith("/help"):
-            reply = (
-                "ℹ️ *Come usare Marianna:*\n\n"
-                "Scrivi semplicemente una domanda.\n"
-                "Marianna cercherà informazioni e ti risponderà.\n\n"
-                "*Esempi:*\n"
-                "• Parlami di Pulcinella\n"
-                "• Chi era Totò?\n"
-                "• Storia di Napoli"
-            )
-            send_message(chat_id, reply)
+            send_message(chat_id, "ℹ️ Scrivi semplicemente una domanda. Marianna cercherà informazioni e ti risponderà.")
         elif text.startswith("/info"):
-            reply = (
-                "🤖 *Bot Marianna*\n\n"
-                "Versione: 2.0\n"
-                "Sviluppato per UniOr NLP Group da Dahlia.\n\n"
-                f"API: `{API_BASE_URL}`"
-            )
-            send_message(chat_id, reply)
+            send_message(chat_id, f"🤖 Bot Marianna v2.0\nAPI: `{API_BASE_URL}`")
         elif text.startswith("/"):
             send_message(chat_id, "⚠️ Comando non riconosciuto. Usa /help")
         else:
-            # Messaggio normale → processa in modo sincrono
-            process_user_message(chat_id, text)
+            # Messaggio normale → invia subito typing e processa tutto sincrono
+            typing = TypingIndicator(chat_id)
+            typing.start()
+            try:
+                # 1️⃣ Ottieni contesto (solo una volta!)
+                context = get_context_from_api(text)
+                if context is None:
+                    send_message(chat_id, "❌ Errore nel recupero del contesto. Riprova più tardi.")
+                    return "ok", 200
+                if not context:
+                    send_message(chat_id, "🔍 Non ho trovato informazioni su questo argomento.")
+                    return "ok", 200
+
+                # 2️⃣ Taglio contesto
+                context = trim_context(context, max_tokens=5800)
+                context = fit_context_for_model(text, context, max_tokens=5800)
+
+                # 3️⃣ Richiesta alla /chat
+                response = get_chat_response(text, context)
+                if not response:
+                    send_message(chat_id, f"📚 *Contesto trovato (parziale):*\n\n{context[:3000]}")
+                else:
+                    send_message(chat_id, f"🤖 *Marianna:*\n\n{response}")
+
+            except Exception as e:
+                print(f"Errore process_user_message: {e}")
+                send_message(chat_id, "❌ Si è verificato un errore. Riprova più tardi.")
+            finally:
+                typing.stop()
 
     except Exception as e:
         print(f"Errore webhook: {e}")
